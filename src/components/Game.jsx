@@ -2,86 +2,62 @@ import React, { useState, useEffect } from 'react';
 import { database } from '../firebase';
 import { ref, update } from 'firebase/database';
 import Chat from './Chat';
+import PlayerHeader from './game/PlayerHeader';
+import HistoryModal from './game/HistoryModal';
+import InputModal from './game/InputModal';
 
 const Game = ({ roomId, players, myId, gameData, isHost, playerName, gameState }) => {
-    const isLiar = gameData?.liar === myId;
+    // --- 1. All Hooks at Top Level ---
     const [showIdentity, setShowIdentity] = useState(false);
     const [guessWord, setGuessWord] = useState('');
+    const [showHistory, setShowHistory] = useState(false);
+    const [showInputModal, setShowInputModal] = useState(false);
 
-    // Phase 1: Game Loop (Discussion)
-    // Phase 2: Voting
+    // Derived State
+    const isLiar = gameData?.liar === myId;
     const hasVoted = gameData.votes && gameData.votes[myId];
-
-    // Phase 3: Result & Liar Guess
     const voteResultId = gameData.voteResult;
-    const isTargeted = voteResultId === myId;
     const targetName = players[voteResultId]?.name || 'Unknown';
+    const displayWord = isLiar ? gameData.liarWord : gameData.word;
 
-    // Helper Header Component
-    const PlayerHeader = () => (
-        <div style={{
-            position: 'fixed', top: 0, left: 0, right: 0,
-            background: 'rgba(0,0,0,0.8)', backdropFilter: 'blur(5px)',
-            padding: '10px', borderBottom: '1px solid #333', zIndex: 100,
-            display: 'flex', justifyContent: 'center', gap: '15px', flexWrap: 'wrap'
-        }}>
-            {Object.entries(players).map(([pid, p]) => (
-                <span key={pid} style={{
-                    color: pid === myId ? '#fff' : '#888',
-                    fontWeight: pid === myId ? 'bold' : 'normal',
-                    fontSize: '0.8rem',
-                    border: pid === myId ? '1px solid #fff' : '1px solid transparent',
-                    padding: '2px 8px', borderRadius: '12px'
-                }}>
-                    {p.name} {p.isHost && '👑'}
-                </span>
-            ))}
-        </div>
-    );
+    // Turn Logic Safe Parsing
+    let rawTurnOrder = gameData.turnOrder || [];
+    if (!Array.isArray(rawTurnOrder)) {
+        rawTurnOrder = Object.values(rawTurnOrder);
+    }
+    const turnOrder = rawTurnOrder;
+    const turnIndex = gameData.turnIndex || 0;
+    const currentTurnId = turnOrder[turnIndex];
+    const isMyTurn = currentTurnId === myId;
+    const currentTurnName = players[currentTurnId]?.name || 'Unknown';
 
-    const handleNextRound = () => {
-        // Only host can trigger this
-        if (!isHost) {
-            console.warn('[Game] Not host, ignoring next round click');
-            return;
+    // Prep Time Logic
+    const [timeLeft, setTimeLeft] = useState(0);
+    const PREP_TIME_MS = 60000; // 60 seconds
+
+    useEffect(() => {
+        if (gameState === 'game' && gameData.startTime) {
+            const interval = setInterval(() => {
+                const elapsed = Date.now() - gameData.startTime;
+                const remaining = Math.max(0, Math.ceil((PREP_TIME_MS - elapsed) / 1000));
+                setTimeLeft(remaining);
+            }, 1000);
+            return () => clearInterval(interval);
         }
+    }, [gameState, gameData.startTime]);
 
-        const current = Number(gameData.currentRound);
-        const total = Number(gameData.totalRounds);
+    const isPrepTime = timeLeft > 0;
 
-        console.log(`[Game] Next Round Clicked. Current: ${current}, Total: ${total}`);
-
-        if (current < total) {
-            console.log(`[Game] Advancing to round ${current + 1}`);
-
-            // Re-shuffle for next round
-            const nextTurnOrder = [...gameData.turnOrder];
-            for (let i = nextTurnOrder.length - 1; i > 0; i--) {
-                const j = Math.floor(Math.random() * (i + 1));
-                [nextTurnOrder[i], nextTurnOrder[j]] = [nextTurnOrder[j], nextTurnOrder[i]];
-            }
-
-            update(ref(database, `rooms/${roomId}`), {
-                currentRound: current + 1,
-                turnOrder: nextTurnOrder,
-                turnIndex: 0
-            }).catch(err => console.error('[Game] Failed to update round:', err));
+    // Auto-open input modal when it's my turn AND prep time is over
+    useEffect(() => {
+        if (isMyTurn && !gameData.winner && gameState === 'game' && !isPrepTime) {
+            setShowInputModal(true);
         } else {
-            console.log('[Game] Max rounds reached. Moving to VOTING phase.');
-            update(ref(database, `rooms/${roomId}`), {
-                status: 'voting'
-            }).then(() => {
-                console.log('[Game] Status updated to voting');
-            }).catch(err => console.error('[Game] Failed to update status to voting:', err));
+            setShowInputModal(false);
         }
-    };
+    }, [isMyTurn, gameData.winner, gameState, isPrepTime]);
 
-    const handleVote = (targetId) => {
-        if (hasVoted) return;
-        update(ref(database, `rooms/${roomId}/votes/${myId}`), {
-            target: targetId
-        });
-    };
+    // --- 2. Effects ---
 
     // Host checks votes
     useEffect(() => {
@@ -89,7 +65,6 @@ const Game = ({ roomId, players, myId, gameData, isHost, playerName, gameState }
             const voteCount = Object.keys(gameData.votes).length;
             const playerCount = Object.keys(players).length;
 
-            // Make sure we have enough votes (wait for everyone)
             if (voteCount >= playerCount) {
                 const tallies = {};
                 Object.values(gameData.votes).forEach(v => {
@@ -99,7 +74,6 @@ const Game = ({ roomId, players, myId, gameData, isHost, playerName, gameState }
                 let maxVotes = 0;
                 let targetId = null;
 
-                // Simple tie-breaking: just take the first max found
                 for (const [pid, count] of Object.entries(tallies)) {
                     if (count > maxVotes) {
                         maxVotes = count;
@@ -117,18 +91,6 @@ const Game = ({ roomId, players, myId, gameData, isHost, playerName, gameState }
         }
     }, [gameData.votes, isHost, players, roomId, gameData.voteResult]);
 
-    const submitLiarGuess = () => {
-        if (!guessWord.trim()) return;
-
-        const isCorrect = guessWord.trim() === gameData.word.trim();
-        const winner = isCorrect ? 'liar' : 'citizens';
-
-        update(ref(database, `rooms/${roomId}`), {
-            winner: winner,
-            liarGuess: guessWord
-        });
-    };
-
     // If citizen was voted out, Liar wins immediately
     useEffect(() => {
         if (isHost && gameData.voteResult && !gameData.winner) {
@@ -140,235 +102,382 @@ const Game = ({ roomId, players, myId, gameData, isHost, playerName, gameState }
         }
     }, [gameData.voteResult, isHost, gameData.liar, roomId, gameData.winner]);
 
+    // --- 3. Action Handlers ---
 
-    // --- Render ---
+    const handleNextRound = () => {
+        if (!isHost) return;
 
-    // 1. Voting Phase (Check gameState explicitily)
-    if (!gameData.winner && gameState === 'voting') {
-        return (
-            <div className="container" style={{ paddingTop: '60px' }}>
-                <PlayerHeader />
-                <h1>투표 시간 🗳️</h1>
-                <div className="card">
-                    <p>라이어라고 생각되는 사람을 선택하세요!</p>
-                    <div className="actions">
-                        {Object.entries(players).map(([pid, p]) => {
-                            const isSelected = hasVoted && gameData.votes && gameData.votes[myId]?.target === pid;
-                            const isMyVote = hasVoted && gameData.votes[myId]; // Just to check if I voted
+        const current = Number(gameData.currentRound);
+        const total = Number(gameData.totalRounds);
 
-                            return (
-                                <button
-                                    key={pid}
-                                    onClick={() => handleVote(pid)}
-                                    disabled={!!hasVoted}
-                                    style={{
-                                        border: isSelected ? '2px solid white' : '1px solid #333',
-                                        opacity: hasVoted && !isSelected ? 0.3 : 1,
-                                        background: isSelected ? '#333' : 'black'
-                                    }}
-                                >
-                                    {p.name} {isSelected && '(선택함)'}
-                                </button>
-                            )
-                        })}
-                    </div>
-                    <p className="status-text">{Object.keys(gameData.votes || {}).length} / {Object.keys(players).length} 명 투표 완료</p>
-                </div>
-                <Chat roomId={roomId} playerName={playerName} myId={myId} />
-            </div>
-        )
-    }
-
-    // 2. Result Phase / Liar Guess
-    if (!gameData.winner && gameState === 'result') {
-        // (The rest of result logic...)
-        if (isTargeted) {
-            return (
-                <div className="container" style={{ paddingTop: '60px' }}>
-                    <PlayerHeader />
-                    <h1>최후의 변론 ⚖️</h1>
-                    <div className="card">
-                        <h2 style={{ color: '#ff3333' }}>당신은 라이어로 지목되었습니다!</h2>
-                        <p>라이어가 맞다면, 제시어를 맞춰 역전할 수 있습니다.</p>
-                        <p>제시어가 무엇일까요?</p>
-
-                        <input
-                            type="text"
-                            placeholder="정답 단어 입력"
-                            value={guessWord}
-                            onChange={(e) => setGuessWord(e.target.value)}
-                        />
-                        <button onClick={submitLiarGuess}>정답 제출 (역전승 도전)</button>
-                    </div>
-                    <Chat roomId={roomId} playerName={playerName} myId={myId} />
-                </div>
-            )
-        } else {
-            return (
-                <div className="container" style={{ paddingTop: '60px' }}>
-                    <PlayerHeader />
-                    <h1>최후의 변론 ⚖️</h1>
-                    <div className="card">
-                        <h2>{targetName} 님이 지목되었습니다.</h2>
-                        <p>그가 정답을 맞히면 라이어 승, 틀리면 시민 승입니다.</p>
-                        <div className="cursor">...결과 기다리는 중...</div>
-                    </div>
-                    <Chat roomId={roomId} playerName={playerName} myId={myId} />
-                </div>
-            )
-        }
-    }
-
-    // 3. Normal Game Loop (Playing)
-    if (!gameData.winner) {
-        const displayWord = isLiar ? gameData.liarWord : gameData.word;
-
-        // Turn Logic
-        const turnOrder = gameData.turnOrder || [];
-        const turnIndex = gameData.turnIndex || 0;
-        const currentTurnId = turnOrder[turnIndex];
-        const isMyTurn = currentTurnId === myId;
-        const currentTurnName = players[currentTurnId]?.name || 'Unknown';
-
-        // Answer handling
-        const submitAnswer = () => {
-            if (!guessWord.trim()) return;
-
-            // Push to history
-            const roundKey = `round${gameData.currentRound}`;
-            const newHistoryRef = ref(database, `rooms/${roomId}/answers/${roundKey}`);
-            // We can't push array easily without key, so we'll just read/update or push with auto-id
-            // Actually, let's just append to a list
+        if (current < total) {
+            // Re-shuffle for next round
+            const nextTurnOrder = [...turnOrder];
+            for (let i = nextTurnOrder.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [nextTurnOrder[i], nextTurnOrder[j]] = [nextTurnOrder[j], nextTurnOrder[i]];
+            }
 
             update(ref(database, `rooms/${roomId}`), {
-                [`answers/${roundKey}/${turnIndex}`]: {
-                    id: myId,
-                    name: playerName,
-                    text: guessWord
-                },
-                turnIndex: turnIndex + 1
+                currentRound: current + 1,
+                turnOrder: nextTurnOrder,
+                turnIndex: 0
             });
-            setGuessWord('');
-        };
+        } else {
+            update(ref(database, `rooms/${roomId}`), {
+                status: 'voting'
+            });
+        }
+    };
 
-        const answers = gameData.answers?.[`round${gameData.currentRound}`] || [];
+    const handleVote = (targetId) => {
+        if (hasVoted) return;
+        update(ref(database, `rooms/${roomId}/votes/${myId}`), {
+            target: targetId
+        });
+    };
 
-        return (
-            <div className="container" style={{ paddingTop: '60px' }}>
-                <PlayerHeader />
-                <h1>
-                    라운드 {gameData.currentRound} / {gameData.totalRounds}
-                </h1>
+    const submitLiarGuess = () => {
+        if (!guessWord.trim()) return;
+        const isCorrect = guessWord.trim() === gameData.word.trim();
+        update(ref(database, `rooms/${roomId}`), {
+            winner: isCorrect ? 'liar' : 'citizens',
+            liarGuess: guessWord
+        });
+    };
 
-                <div style={{ width: '100%', maxWidth: '600px', marginBottom: '1rem', textAlign: 'left' }}>
-                    <div style={{ background: '#111', padding: '10px', border: '1px solid #333', borderRadius: '4px', height: '150px', overflowY: 'auto' }}>
-                        <h4 style={{ margin: '0 0 10px 0', borderBottom: '1px solid #333', color: '#888' }}>📝 이번 라운드 기록</h4>
-                        {answers && Object.values(answers).map((ans, idx) => (
-                            <div key={idx} style={{ marginBottom: '5px', fontSize: '0.9rem' }}>
-                                <span style={{ color: ans.id === myId ? '#fff' : '#aaa', fontWeight: 'bold' }}>{ans.name}:</span> {ans.text}
-                            </div>
-                        ))}
-                    </div>
-                </div>
+    const submitAnswer = () => {
+        if (!guessWord.trim()) return;
+        const roundKey = `round${gameData.currentRound}`;
+        update(ref(database, `rooms/${roomId}`), {
+            [`answers/${roundKey}/${turnIndex}`]: {
+                id: myId,
+                name: playerName,
+                text: guessWord
+            },
+            turnIndex: turnIndex + 1
+        });
+        setGuessWord('');
+        setShowInputModal(false);
+    };
 
-                <div className="card">
-                    {!showIdentity ? (
-                        <div style={{ textAlign: 'center', padding: '2rem' }}>
-                            <button onClick={() => setShowIdentity(true)} style={{ fontSize: '1.2rem', padding: '1rem 2rem' }}>
-                                🔒 제시어 확인하기
-                            </button>
-                        </div>
-                    ) : (
-                        <div style={{ textAlign: 'center', animation: 'fadeIn 0.5s' }}>
-                            <div style={{ margin: '1rem 0', padding: '1rem', background: '#222', borderRadius: '4px', border: '1px solid #444' }}>
-                                <p style={{ color: '#888', margin: 0, fontSize: '0.7rem' }}>MY WORD</p>
-                                <h3 style={{ margin: '0.5rem 0', fontSize: '1.5rem', color: 'white', border: 'none' }}>
-                                    {displayWord} <span style={{ fontSize: '0.8rem', color: '#666' }}>({gameData?.category})</span>
-                                </h3>
-                            </div>
+    const [elapsedTime, setElapsedTime] = useState('00:00');
 
-                            <div style={{ marginTop: '2rem', padding: '1rem', border: '1px solid #333', background: '#0a0a0a' }}>
-                                {turnIndex < turnOrder.length ? (
-                                    <>
-                                        <p style={{ color: '#aaa', fontSize: '0.9rem' }}>발언 순서</p>
-                                        <h2 style={{ margin: '0.5rem 0', color: isMyTurn ? '#00ff00' : 'white' }}>
-                                            {isMyTurn ? '당신의 차례입니다!' : `${currentTurnName} 님의 차례`}
-                                        </h2>
+    // ... (existing hooks)
 
-                                        {isMyTurn ? (
-                                            <div style={{ display: 'flex', gap: '0.5rem', marginTop: '1rem' }}>
-                                                <input
-                                                    type="text"
-                                                    value={guessWord}
-                                                    onChange={(e) => setGuessWord(e.target.value)}
-                                                    placeholder="설명을 입력하세요..."
-                                                    autoFocus
-                                                />
-                                                <button onClick={submitAnswer} style={{ width: 'auto' }}>입력</button>
-                                            </div>
-                                        ) : (
-                                            <div style={{ marginTop: '1rem', color: '#666', fontSize: '0.8rem' }}>
-                                                답변을 기다리는 중...
-                                            </div>
-                                        )}
-                                    </>
-                                ) : (
-                                    <div style={{ color: '#888' }}>
-                                        <p>모든 플레이어가 발언했습니다.</p>
-                                        {isHost && <p style={{ color: '#00ff00' }}>다음 라운드 혹은 투표를 진행해주세요.</p>}
-                                    </div>
-                                )}
-                            </div>
-                        </div>
-                    )}
+    // Timer Effect
+    useEffect(() => {
+        if (!gameData.startTime || gameData.winner) return;
 
-                    <div style={{ marginTop: '2rem' }}>
-                        {isHost && (
-                            <button onClick={handleNextRound} disabled={turnIndex < turnOrder.length}>
-                                {gameData.currentRound < gameData.totalRounds ? '다음 라운드 진행 >' : '투표 시작하기 >'}
-                            </button>
-                        )}
-                        {!isHost && (
-                            <p className="status-text">
-                                {turnIndex < turnOrder.length ? '발언 진행 중...' : '방장이 다음 단계를 준비 중입니다.'}
-                            </p>
-                        )}
-                    </div>
-                </div>
+        const interval = setInterval(() => {
+            const now = Date.now();
+            const start = gameData.startTime;
+            const diff = Math.max(0, now - start);
 
-                <Chat roomId={roomId} playerName={playerName} myId={myId} />
-            </div>
-        );
-    }
+            const minutes = Math.floor(diff / 60000);
+            const seconds = Math.floor((diff % 60000) / 1000);
 
-    // 4. Game End
-    const liarWon = gameData.winner === 'liar';
+            setElapsedTime(
+                `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`
+            );
+        }, 1000);
+
+        return () => clearInterval(interval);
+    }, [gameData.startTime, gameData.winner]);
+
+    // --- 4. Main Render ---
     return (
-        <div className="container" style={{ paddingTop: '60px' }}>
-            <PlayerHeader />
-            <h1>게임 종료</h1>
-            <div className="card" style={{ borderColor: liarWon ? '#ff3333' : '#00ff00' }}>
-                <div style={{ fontSize: '4rem', margin: '1rem 0' }}>
-                    {liarWon ? '😈' : '😇'}
+        <div className="container" style={{ maxWidth: '400px', width: '100%', paddingTop: '80px', paddingBottom: '20px', position: 'relative' }}>
+            {/* Top Bar with Timer */}
+            <div style={{
+                position: 'fixed', top: 0, left: 0, right: 0,
+                height: '60px', background: 'rgba(0,0,0,0.8)', backdropFilter: 'blur(5px)',
+                display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 100,
+                borderBottom: '1px solid #333'
+            }}>
+                <div style={{ fontSize: '1.2rem', fontFamily: 'monospace', color: '#fff', letterSpacing: '2px' }}>
+                    ⏱ {elapsedTime}
                 </div>
-                <h2>{liarWon ? '라이어 승리!' : '시민 승리!'}</h2>
-
-                <div style={{ margin: '2rem 0', textAlign: 'left', background: '#222', padding: '1rem' }}>
-                    <p>라이어: <strong>{players[gameData.liar]?.name}</strong></p>
-                    <p>진짜 제시어 (시민): <strong style={{ color: '#00ff00' }}>{gameData.word}</strong></p>
-                    <p>가짜 제시어 (라이어): <strong style={{ color: '#ff3333' }}>{gameData.liarWord}</strong></p>
-                    {gameData.liarGuess && <p>라이어의 마지막 추측: {gameData.liarGuess}</p>}
-                </div>
-
-                {isHost && (
-                    <button onClick={() => {
-                        update(ref(database, `rooms/${roomId}`), { status: 'waiting', votes: null, voteResult: null, winner: null, totalRounds: null, currentRound: null, liarWord: null });
-                    }}>대기실로 돌아가기</button>
-                )}
             </div>
+
+            <PlayerHeader players={players} myId={myId} />
+            {showHistory && <HistoryModal gameData={gameData} onClose={() => setShowHistory(false)} />}
+            {(isMyTurn && showInputModal) && (
+                <InputModal
+                    value={guessWord}
+                    onChange={setGuessWord}
+                    onSubmit={submitAnswer}
+                />
+            )}
+
+            {/* A. Game End Screen */}
+            {gameData.winner && (
+                <>
+                    <div style={{ textAlign: 'center', marginBottom: '2rem' }}>
+                        <h1 style={{ fontSize: '3rem', margin: 0, color: gameData.winner === 'liar' ? '#fff' : '#fff' }}>GAME OVER</h1>
+                        <p style={{ color: '#888', letterSpacing: '0.2em' }}>게임 종료</p>
+                    </div>
+
+                    <div className="card" style={{ borderColor: gameData.winner === 'liar' ? '#fff' : '#fff', background: '#050505' }}>
+                        <div style={{ fontSize: '5rem', margin: '2rem 0', lineHeight: 1 }}>
+                            {gameData.winner === 'liar' ? '😈' : '😇'}
+                        </div>
+                        <h2 style={{ fontSize: '2rem', borderBottom: '1px solid #333', paddingBottom: '1rem' }}>
+                            {gameData.winner === 'liar' ? 'LIAR WINS' : 'CITIZENS WIN'}
+                        </h2>
+
+                        <div style={{ margin: '2rem 0', textAlign: 'left', background: '#111', padding: '1.5rem', borderRadius: '4px' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '10px' }}>
+                                <span style={{ color: '#888' }}>라이어</span>
+                                <strong style={{ color: '#fff' }}>{players[gameData.liar]?.name}</strong>
+                            </div>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '10px' }}>
+                                <span style={{ color: '#888' }}>진짜 제시어</span>
+                                <strong style={{ color: '#fff' }}>{gameData.word}</strong>
+                            </div>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '10px' }}>
+                                <span style={{ color: '#888' }}>라이어 제시어</span>
+                                <strong style={{ color: '#ccc' }}>{gameData.liarWord}</strong>
+                            </div>
+                            {gameData.liarGuess && (
+                                <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '15px', paddingTop: '15px', borderTop: '1px solid #333' }}>
+                                    <span style={{ color: '#888' }}>라이어의 추측</span>
+                                    <strong style={{ color: '#fff' }}>{gameData.liarGuess}</strong>
+                                </div>
+                            )}
+                        </div>
+
+                        {isHost && (
+                            <button onClick={() => {
+                                update(ref(database, `rooms/${roomId}`), { status: 'waiting', votes: null, voteResult: null, winner: null, totalRounds: null, currentRound: null, liarWord: null });
+                            }} style={{ background: '#fff', color: '#000', border: 'none', fontWeight: 'bold' }}>
+                                대기실로 돌아가기
+                            </button>
+                        )}
+                    </div>
+                </>
+            )}
+
+            {/* B. Voting Screen */}
+            {!gameData.winner && gameState === 'voting' && (
+                <>
+                    <div style={{ textAlign: 'center', marginBottom: '2rem' }}>
+                        <h1 style={{ fontSize: '2.5rem', margin: 0 }}>VOTING</h1>
+                        <p style={{ color: '#666', letterSpacing: '0.1em' }}>( 투표 시간 )</p>
+                    </div>
+
+                    <div className="card" style={{ border: '1px solid #333', background: '#050505' }}>
+                        <p style={{ fontSize: '0.9rem', color: '#ccc', marginBottom: '1.5rem' }}>라이어라고 의심되는 플레이어를 선택하세요.</p>
+                        <div className="actions" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '10px' }}>
+                            {Object.entries(players).map(([pid, p]) => {
+                                const isSelected = hasVoted && gameData.votes && gameData.votes[myId]?.target === pid;
+                                return (
+                                    <button
+                                        key={pid}
+                                        onClick={() => handleVote(pid)}
+                                        disabled={!!hasVoted}
+                                        style={{
+                                            border: '1px solid #fff',
+                                            background: isSelected ? '#fff' : 'transparent',
+                                            color: isSelected ? '#000' : '#fff',
+                                            padding: '15px',
+                                            fontSize: '1rem',
+                                            opacity: hasVoted && !isSelected ? 0.3 : 1,
+                                            cursor: hasVoted ? 'default' : 'pointer',
+                                            transition: 'all 0.2s',
+                                            height: '60px',
+                                            display: 'flex', alignItems: 'center', justifyContent: 'center'
+                                        }}
+                                    >
+                                        {p.name} {isSelected && '👈'}
+                                    </button>
+                                )
+                            })}
+                        </div>
+                        <div style={{ marginTop: '1.5rem', textAlign: 'center', color: '#666', fontSize: '0.8rem' }}>
+                            {Object.keys(gameData.votes || {}).length} / {Object.keys(players).length} VOTED
+                        </div>
+                    </div>
+                </>
+            )}
+
+            {/* C. Result Screen */}
+            {!gameData.winner && gameState === 'result' && (
+                <>
+                    <div style={{ textAlign: 'center', marginBottom: '2rem' }}>
+                        <h1 style={{ fontSize: '2.5rem', margin: 0 }}>FINAL DEFENSE</h1>
+                        <p style={{ color: '#666', letterSpacing: '0.1em' }}>최후의 변론</p>
+                    </div>
+
+                    <div className="card" style={{ background: '#050505', border: '1px solid #333' }}>
+                        {gameData.voteResult === myId ? (
+                            <div style={{ textAlign: 'center' }}>
+                                <h2 style={{ color: '#fff', fontSize: '1.5rem', marginBottom: '1rem' }}>당신이 지목되었습니다!</h2>
+                                <p style={{ color: '#aaa', fontSize: '0.9rem', lineHeight: '1.6', marginBottom: '2rem' }}>
+                                    만약 당신이 라이어라면,<br />
+                                    <strong style={{ color: '#fff' }}>제시어를 맞추어 역전승</strong>할 수 있습니다.
+                                </p>
+                                <input
+                                    type="text"
+                                    placeholder="정답 단어 입력"
+                                    value={guessWord}
+                                    onChange={(e) => setGuessWord(e.target.value)}
+                                    style={{ textAlign: 'center', fontSize: '1.2rem', padding: '15px', marginBottom: '1rem', background: '#111', color: '#fff', border: '1px solid #333' }}
+                                />
+                                <button onClick={submitLiarGuess} style={{ background: '#fff', color: '#000', fontWeight: 'bold' }}>
+                                    정답 제출
+                                </button>
+                            </div>
+                        ) : (
+                            <div style={{ textAlign: 'center', padding: '2rem 1rem' }}>
+                                <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>⚖️</div>
+                                <h2 style={{ fontSize: '1.2rem', color: '#fff' }}>
+                                    <span style={{ borderBottom: '1px solid #fff', paddingBottom: '2px' }}>{targetName}</span> 님이 지목되었습니다.
+                                </h2>
+                                <p style={{ color: '#666', marginTop: '1rem' }}>최후의 변론 및 결과 대기 중...</p>
+                            </div>
+                        )}
+                    </div>
+                </>
+            )}
+
+            {/* D. Playing Screen (Default) */}
+            {!gameData.winner && gameState === 'game' && (
+                <>
+                    <div style={{ textAlign: 'center', marginBottom: '2rem' }}>
+                        <p style={{ color: '#666', fontSize: '0.8rem', letterSpacing: '0.15em', marginBottom: '0.5rem' }}>ROUND</p>
+                        <h1 style={{ fontSize: '3.5rem', margin: 0, lineHeight: 1, color: '#fff' }}>
+                            {gameData.currentRound} <span style={{ fontSize: '1.5rem', color: '#444' }}>/ {gameData.totalRounds}</span>
+                        </h1>
+                    </div>
+
+                    <div className="card" style={{ marginBottom: '1.5rem', padding: '1.5rem', border: '1px solid #333', background: '#050505' }}>
+                        {!showIdentity ? (
+                            <button
+                                onClick={() => setShowIdentity(true)}
+                                style={{
+                                    width: '100%', padding: '20px', background: '#111',
+                                    border: '1px dashed #444', color: '#888',
+                                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px',
+                                    cursor: 'pointer', transition: 'all 0.2s'
+                                }}
+                                onMouseOver={(e) => { e.target.style.background = '#151515'; e.target.style.borderColor = '#666'; }}
+                                onMouseOut={(e) => { e.target.style.background = '#111'; e.target.style.borderColor = '#444'; }}
+                            >
+                                🔒 제시어 확인하기 (CLICK)
+                            </button>
+                        ) : (
+                            <div style={{ textAlign: 'center', animation: 'fadeIn 0.3s' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', borderBottom: '1px solid #222', paddingBottom: '10px' }}>
+                                    <span style={{ fontSize: '0.8rem', color: '#666', letterSpacing: '0.1em' }}>TOPIC</span>
+                                    <span style={{ fontSize: '0.9rem', color: '#fff', fontWeight: 'bold' }}>{gameData?.category}</span>
+                                </div>
+
+                                <h2 style={{ margin: '1rem 0 2rem 0', fontSize: '2.5rem', color: '#fff' }}>
+                                    {displayWord}
+                                </h2>
+
+                                <button onClick={() => setShowIdentity(false)} className="secondary" style={{ padding: '8px 16px', fontSize: '0.8rem', width: 'auto' }}>
+                                    🙈 가리기
+                                </button>
+                            </div>
+                        )}
+                    </div>
+
+                    <div className="card" style={{ padding: '0', border: 'none', background: 'transparent', boxShadow: 'none' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                            <h3 style={{ margin: 0, fontSize: '0.9rem', color: '#888', letterSpacing: '0.1em' }}>TURN ORDER</h3>
+                            <button onClick={() => setShowHistory(true)} style={{ width: 'auto', padding: '4px 8px', fontSize: '0.7rem', background: 'transparent', border: '1px solid #444', color: '#888' }}>
+                                HISTORY
+                            </button>
+                        </div>
+
+                        {/* Visual Turn Order */}
+                        <div style={{
+                            display: 'flex', gap: '8px', overflowX: 'auto', padding: '4px', marginBottom: '1.5rem',
+                            scrollBehavior: 'smooth', WebkitOverflowScrolling: 'touch'
+                        }}>
+                            {turnOrder.map((pid, idx) => {
+                                const pName = players[pid]?.name || 'Unknown';
+                                const isCurrent = idx === turnIndex;
+                                const isPast = idx < turnIndex;
+                                return (
+                                    <div key={idx} style={{
+                                        flex: '0 0 auto',
+                                        padding: '8px 16px',
+                                        borderRadius: '20px',
+                                        background: isCurrent ? '#fff' : (isPast ? '#111' : '#050505'),
+                                        color: isCurrent ? '#000' : (isPast ? '#444' : '#666'),
+                                        fontSize: '0.8rem',
+                                        fontWeight: isCurrent ? 'bold' : 'normal',
+                                        border: isCurrent ? '1px solid #fff' : '1px solid #333',
+                                        opacity: isPast ? 0.5 : 1
+                                    }}>
+                                        <span style={{ marginRight: '5px', opacity: 0.5 }}>{idx + 1}</span>
+                                        {pName}
+                                    </div>
+                                )
+                            })}
+                        </div>
+
+                        {/* Current Turn Status */}
+                        <div style={{ padding: '2rem', border: '1px solid #fff', background: '#000', borderRadius: '4px', textAlign: 'center', position: 'relative', overflow: 'hidden' }}>
+                            {/* Decorative corner */}
+                            <div style={{ position: 'absolute', top: 0, left: 0, width: '10px', height: '10px', borderTop: '2px solid #fff', borderLeft: '2px solid #fff' }}></div>
+                            <div style={{ position: 'absolute', bottom: 0, right: 0, width: '10px', height: '10px', borderBottom: '2px solid #fff', borderRight: '2px solid #fff' }}></div>
+
+                            {isPrepTime ? (
+                                <div style={{ animation: 'pulse 1s infinite' }}>
+                                    <p style={{ color: '#888', fontSize: '0.8rem', letterSpacing: '0.2em', marginBottom: '1rem' }}>PREPARE TIME</p>
+                                    <div style={{ fontSize: '3.5rem', fontWeight: 'bold', color: '#fff', lineHeight: 1 }}>
+                                        {timeLeft}<span style={{ fontSize: '1rem' }}>s</span>
+                                    </div>
+                                    <p style={{ color: '#666', fontSize: '0.8rem', marginTop: '1rem' }}>
+                                        제시어를 확인하고 전략을 세우세요
+                                    </p>
+                                </div>
+                            ) : (
+                                <>
+                                    {turnIndex < turnOrder.length ? (
+                                        <>
+                                            <p style={{ color: '#666', fontSize: '0.8rem', letterSpacing: '0.2em', marginBottom: '0.5rem' }}>CURRENT TURN</p>
+                                            <h2 style={{ margin: '0.5rem 0', color: isMyTurn ? '#fff' : '#888', fontSize: '1.8rem' }}>
+                                                {isMyTurn ? 'YOUR TURN' : currentTurnName}
+                                            </h2>
+                                            {isMyTurn ? (
+                                                <div style={{ marginTop: '1rem', padding: '5px 10px', background: '#111', display: 'inline-block', fontSize: '0.8rem', color: '#fff', border: '1px solid #333' }}>
+                                                    📢 발언을 입력하세요
+                                                </div>
+                                            ) : (
+                                                <p style={{ color: '#444', fontSize: '0.8rem', marginTop: '0.5rem' }}>발언 중...</p>
+                                            )}
+                                        </>
+                                    ) : (
+                                        <div style={{ padding: '1rem 0' }}>
+                                            <div style={{ fontSize: '2rem', marginBottom: '1rem' }}>✅</div>
+                                            <p style={{ color: '#fff', fontWeight: 'bold', marginBottom: '1rem' }}>ROUND COMPLETE</p>
+                                            {isHost ? (
+                                                <button
+                                                    onClick={handleNextRound}
+                                                    style={{ background: '#fff', color: '#000', fontSize: '0.9rem', width: 'auto', padding: '10px 20px', border: 'none' }}
+                                                >
+                                                    {gameData.currentRound < gameData.totalRounds ? 'NEXT ROUND >' : 'START VOTING >'}
+                                                </button>
+                                            ) : (
+                                                <p style={{ color: '#666', fontSize: '0.8rem' }}>Waiting for host...</p>
+                                            )}
+                                        </div>
+                                    )}
+                                </>
+                            )}
+                        </div>
+                    </div>
+                </>
+            )}
+
             <Chat roomId={roomId} playerName={playerName} myId={myId} />
         </div>
-    )
+    );
 };
 
 export default Game;

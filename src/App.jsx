@@ -40,17 +40,8 @@ function App() {
 
                 // Store game-specific data
                 if (data.liar && data.word && data.category) {
-                    setGameData({
-                        liar: data.liar,
-                        word: data.word,
-                        liarWord: data.liarWord, // Pass the fake word
-                        category: data.category,
-                        totalRounds: data.totalRounds || 1,
-                        currentRound: data.currentRound || 1,
-                        votes: data.votes || {},
-                        voteResult: data.voteResult || null,
-                        winner: data.winner || null
-                    });
+                    const { players: _p, ...gameInfo } = data;
+                    setGameData(gameInfo);
                 }
 
                 // Check game status

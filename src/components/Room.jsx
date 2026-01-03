@@ -56,36 +56,73 @@ const Room = ({ roomId, players, isHost, myId }) => {
     };
 
     return (
-        <div className="container">
-            <h1>방 번호: {roomId}</h1>
-            <div className="card">
-                <h3>플레이어 ({Object.keys(players).length})</h3>
-                <ul className="player-list">
-                    {Object.entries(players).map(([id, p]) => (
-                        <li key={id} className={id === myId ? 'me' : ''}>
-                            <span>{p.name} {p.isHost ? '👑' : ''}</span>
-                        </li>
-                    ))}
-                </ul>
+        <div className="container" style={{ maxWidth: '400px' }}>
+            <div style={{ textAlign: 'center', marginBottom: '2rem' }}>
+                <p style={{ color: '#888', margin: 0, fontSize: '0.9rem', letterSpacing: '0.1em', textTransform: 'uppercase' }}>ROOM CODE</p>
+                <h1 style={{ margin: '0.5rem 0 0 0', fontSize: '4rem', letterSpacing: '0.1em', color: '#fff', border: 'none', lineHeight: 1 }}>{roomId}</h1>
+            </div>
 
-                {isHost && (
-                    <div style={{ margin: '1rem 0' }}>
-                        <label style={{ display: 'block', marginBottom: '0.5rem', color: '#aaa' }}>게임 라운드 (발언 횟수)</label>
-                        <select value={rounds} onChange={(e) => setRounds(Number(e.target.value))}>
-                            {[1, 2, 3, 4, 5, 6, 7, 8].map(num => (
-                                <option key={num} value={num}>{num} 라운드</option>
-                            ))}
-                        </select>
+            <div className="card" style={{ padding: '2rem', border: '1px solid #333', background: '#050505', boxShadow: '0 10px 30px rgba(0,0,0,0.5)' }}>
+                <div style={{ marginBottom: '2rem' }}>
+                    <h3 style={{ margin: 0, color: '#fff', fontSize: '1rem', borderBottom: '1px solid #333', paddingBottom: '10px', display: 'flex', justifyContent: 'space-between' }}>
+                        PLAYERS
+                        <span style={{ color: '#666' }}>{Object.keys(players).length} / 20</span>
+                    </h3>
+
+                    <ul className="player-list" style={{ marginTop: '1rem', maxHeight: '300px', overflowY: 'auto' }}>
+                        {Object.entries(players).map(([id, p]) => (
+                            <li key={id} style={{
+                                padding: '12px 0', borderBottom: '1px solid #111',
+                                color: id === myId ? '#fff' : '#888',
+                                display: 'flex', justifyContent: 'space-between', alignItems: 'center'
+                            }}>
+                                <span style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                    {id === myId && <span style={{ color: '#fff', fontSize: '0.8rem' }}>▶</span>}
+                                    {p.name}
+                                </span>
+                                {p.isHost && <span className="badge-host" style={{ background: '#333', color: '#fff', border: '1px solid #666' }}>HOST</span>}
+                            </li>
+                        ))}
+                    </ul>
+                </div>
+
+                {isHost ? (
+                    <div style={{ animation: 'fadeIn 0.5s' }}>
+                        <div style={{ marginBottom: '1.5rem' }}>
+                            <label style={{ display: 'block', marginBottom: '8px', color: '#666', fontSize: '0.7rem', fontWeight: 'bold' }}>TOTAL ROUNDS</label>
+                            <select
+                                value={rounds}
+                                onChange={(e) => setRounds(Number(e.target.value))}
+                                style={{ background: '#111', color: '#fff', border: '1px solid #333', padding: '12px', textAlign: 'center' }}
+                            >
+                                {[1, 2, 3, 4, 5, 6, 7, 8].map(num => (
+                                    <option key={num} value={num}>{num} 라운드</option>
+                                ))}
+                            </select>
+                        </div>
+                        <button
+                            onClick={startGame}
+                            style={{ background: '#fff', color: '#000', border: '1px solid #fff', padding: '16px', fontSize: '1.2rem', fontWeight: 'bold' }}
+                        >
+                            GAME START
+                        </button>
+                    </div>
+                ) : (
+                    <div style={{ textAlign: 'center', padding: '2rem 0', color: '#444' }}>
+                        <div style={{ fontSize: '2rem', marginBottom: '1rem', animation: 'pulse 2s infinite' }}>⏳</div>
+                        <p style={{ margin: 0, fontSize: '0.9rem' }}>WAITING FOR HOST...</p>
                     </div>
                 )}
+            </div>
 
-                <div className="actions" style={{ marginTop: '2rem' }}>
-                    {isHost ? (
-                        <button onClick={startGame}>게임 시작!</button>
-                    ) : (
-                        <p className="status-text">방장이 게임을 시작하길 기다리는 중...</p>
-                    )}
-                </div>
+            <div style={{ marginTop: '2rem', textAlign: 'center' }}>
+                <button
+                    className="secondary"
+                    onClick={() => window.location.reload()}
+                    style={{ border: 'none', color: '#444', fontSize: '0.8rem', textDecoration: 'underline', width: 'auto', padding: '5px' }}
+                >
+                    LEAVE ROOM
+                </button>
             </div>
         </div>
     );

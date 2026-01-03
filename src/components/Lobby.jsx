@@ -1,10 +1,11 @@
 import React, { useState } from 'react';
 import { database } from '../firebase';
 import { ref, set, get, child, update } from 'firebase/database';
-import { v4 as uuidv4 } from 'uuid';
+import RuleModal from './game/RuleModal';
 
 const Lobby = ({ playerName, setPlayerName, setRoomId, setGameState, setIsHost, setError, myId }) => {
     const [inputRoomId, setInputRoomId] = useState('');
+    const [showRules, setShowRules] = useState(false);
 
     const createRoom = async () => {
         if (!playerName) {
@@ -72,35 +73,71 @@ const Lobby = ({ playerName, setPlayerName, setRoomId, setGameState, setIsHost, 
     };
 
     return (
-        <div className="container">
-            <h1>라이어 게임</h1>
-            <div className="card">
-                <h2>대기실</h2>
+        <div className="container" style={{ maxWidth: '400px' }}>
+            {showRules && <RuleModal onClose={() => setShowRules(false)} />}
 
-                <div className="input-group">
+            <div style={{ position: 'relative', width: '100%', marginBottom: '2rem', textAlign: 'center' }}>
+                <h1 style={{ margin: 0, border: 'none', fontSize: '3rem', letterSpacing: '0.1em', textShadow: '0 0 20px rgba(255,255,255,0.3)', color: '#fff' }}>LIAR GAME</h1>
+                <p style={{ color: '#666', marginTop: '5px', fontSize: '0.9rem', letterSpacing: '0.2em', textTransform: 'uppercase' }}>라이어 게임</p>
+            </div>
+
+            <div className="card" style={{ padding: '2.5rem 2rem', border: '1px solid #333', background: '#050505', boxShadow: '0 10px 30px rgba(0,0,0,0.5)' }}>
+                <button
+                    onClick={() => setShowRules(true)}
+                    style={{
+                        position: 'absolute', top: '15px', right: '15px',
+                        width: 'auto', padding: '5px', background: 'transparent',
+                        border: 'none', fontSize: '1.2rem', color: '#666', cursor: 'pointer'
+                    }}
+                    title="게임 설명"
+                >
+                    📖
+                </button>
+
+                <div style={{ marginBottom: '2.5rem', textAlign: 'center' }}>
+                    <h2 style={{ margin: 0, fontSize: '1.5rem', color: '#fff', border: 'none', letterSpacing: '0.1em' }}>LOGIN</h2>
+                    <div style={{ width: '30px', height: '2px', background: '#fff', margin: '15px auto' }}></div>
+                </div>
+
+                <div className="input-group" style={{ marginBottom: '2rem' }}>
+                    <label style={{ display: 'block', textAlign: 'left', marginBottom: '8px', color: '#888', fontSize: '0.7rem', fontWeight: 'bold', letterSpacing: '0.05em' }}>NICKNAME</label>
                     <input
                         type="text"
                         placeholder="닉네임을 입력하세요"
                         value={playerName}
                         onChange={(e) => setPlayerName(e.target.value)}
+                        style={{ textAlign: 'center', fontSize: '1.1rem', padding: '12px', background: '#111', border: '1px solid #333', color: '#fff' }}
                     />
                 </div>
 
                 <div className="actions">
-                    <button onClick={createRoom}>방 만들기</button>
-                    <div className="divider">또는</div>
-                    <input
-                        type="text"
-                        placeholder="참여 코드 (예: 1234)"
-                        value={inputRoomId}
-                        onChange={(e) => setInputRoomId(e.target.value)}
-                        maxLength={4}
-                        style={{ width: '50%', margin: '0 auto' }}
-                    />
-                    <button onClick={joinRoom} className="secondary">방 입장하기</button>
+                    <button onClick={createRoom} style={{ background: '#fff', color: '#000', border: '1px solid #fff', fontSize: '1rem', fontWeight: 'bold' }}>
+                        방 만들기
+                    </button>
+
+                    <div className="divider" style={{ margin: '1.5rem 0', color: '#444' }}>OR</div>
+
+                    <div style={{ display: 'flex', gap: '10px' }}>
+                        <input
+                            type="text"
+                            placeholder="CODE"
+                            value={inputRoomId}
+                            onChange={(e) => setInputRoomId(e.target.value)}
+                            maxLength={4}
+                            style={{
+                                flex: 1, margin: 0, textAlign: 'center', letterSpacing: '0.2em',
+                                background: '#111', border: '1px solid #333', color: '#fff',
+                                textTransform: 'uppercase'
+                            }}
+                        />
+                        <button onClick={joinRoom} className="secondary" style={{ flex: 1.5, margin: 0, border: '1px solid #888', color: '#ccc' }}>
+                            입장하기
+                        </button>
+                    </div>
                 </div>
             </div>
-            <div style={{ marginTop: '2rem', color: '#666', fontSize: '0.8rem' }}>
+
+            <div style={{ marginTop: '2rem', color: '#444', fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.1em', textAlign: 'center' }}>
                 Made by 우철탄
             </div>
         </div>
